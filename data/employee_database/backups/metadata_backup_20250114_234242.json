@@ -1,0 +1,18 @@
+{
+    "00002": {
+        "name": "Ingo H",
+        "registration_date": "20250114_172359",
+        "reference_image": "c:\\Users\\h_ing\\Documents\\GitHub\\Face_recognition_AI_Deepface\\Face_Recognition_AI\\data\\employee_database\\00002\\20250114_172359.jpg"
+    },
+    "10002": {
+        "name": "Miroslava",
+        "registration_date": "20250114_210915",
+        "reference_image": "c:\\Users\\h_ing\\Documents\\GitHub\\Face_recognition_AI_Deepface\\Face_Recognition_AI\\data\\employee_database\\10002\\20250114_210915.jpg"
+    },
+    "54321": {
+        "name": "Ingo Tello",
+        "registration_date": "20250114_234242",
+        "reference_image": "C:\\Users\\h_ing\\Documents\\GitHub\\Face_recognition_AI_Deepface\\Face_Recognition_AI\\data\\employee_database\\54321\\20250114_234242.jpg",
+        "last_updated": "2025-01-14T23:42:42.122872"
+    }
+}
