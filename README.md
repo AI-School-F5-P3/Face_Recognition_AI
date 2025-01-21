@@ -1,5 +1,9 @@
 # Face Recognition project - Employee Management System
 
+### Business Presentation
+
+https://www.canva.com/design/DAGc0I0yjQE/dTzLm4posF9WEMH86vnpAA/edit?utm_content=DAGc0I0yjQE&utm_campaign=designshare&utm_medium=link2&utm_source=sharebutton
+
 ### Overview
 
 This project is an Employee Management System designed to store employee information, manage their attendance, and verify employee identities using facial recognition. The application integrates with MongoDB to store metadata and images and leverages OpenCV and DeepFace for image processing and facial recognition.
