@@ -91,6 +91,8 @@ The application should now be running on http://localhost:5000.
 The client required an intuitive system to:
 
 - Register Employees: Each employee should have a unique ID, name, and reference image stored securely.
+  
+- Real-Time Recognition: The system detects faces via the laptop camera.
 
 - Verify Attendance: Use facial recognition to verify employees as they clock in and out.
 
