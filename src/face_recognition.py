@@ -1,6 +1,7 @@
 from deepface import DeepFace
 import cv2
 import numpy as np
+import os
 from typing import Optional, Dict, Tuple
 from .config import FACE_RECOGNITION_SETTINGS, CAMERA_SETTINGS
 from .database import EmployeeDatabase, AttendanceLogger
@@ -25,37 +26,32 @@ class FacialRecognitionSystem:
         )
 
     def verify_face(self, face_frame: np.ndarray, employee_data: Dict) -> bool:
-        """
-        Verify if face matches employee reference image.
-
-        Args:
-            face_frame: Numpy array containing the face image
-            employee_data: Dictionary containing employee information
-
-        Returns:
-            bool: True if face matches, False otherwise
-        """
         try:
             if not self._validate_frame(face_frame):
                 return False
 
-            # Convert face_frame to BGR if it's not already
-            if face_frame.shape[2] == 4:  # RGBA format
+            # Convert face_frame to BGR if needed
+            if face_frame.shape[2] == 4:
                 face_frame = cv2.cvtColor(face_frame, cv2.COLOR_RGBA2BGR)
 
+            # Save temporary file for DeepFace
+            temp_path = os.path.join(os.getcwd(), "temp_face.jpg")
+            cv2.imwrite(temp_path, face_frame)
+
             result = DeepFace.verify(
-                img1_path=face_frame,
+                img1_path=temp_path,
                 img2_path=employee_data["reference_image"],
-                model_name=self.settings[
-                    "model_name"
-                ],  # Changed from model to model_name
+                model_name=self.settings["model_name"],
                 detector_backend=self.settings["detector_backend"],
                 distance_metric=self.settings["distance_metric"],
                 enforce_detection=False,
             )
-            return (
-                result["verified"] and result["distance"] < self.settings["threshold"]
-            )
+
+            # Clean up temp file
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
+            return result["verified"] and result["distance"] < self.settings["threshold"]
 
         except Exception as e:
             print(f"Verification error: {str(e)}")

@@ -20,6 +20,7 @@ TARGET_FPS = 30
 db = EmployeeDatabase()
 recognition_system = FacialRecognitionSystem()
 
+
 # Initialize session state variables
 if "camera_open" not in st.session_state:
     st.session_state["camera_open"] = False
@@ -138,7 +139,7 @@ def main():
 
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("Toggle Camera"):
+            if st.button("Toggle Camera", key="register_toggle_camera"):
                 if not st.session_state["camera_open"]:
                     if initialize_camera():
                         st.session_state["camera_open"] = True
@@ -171,7 +172,7 @@ def main():
                         time.sleep(1.0 / TARGET_FPS - time_elapsed)
 
                     with col2:
-                        if st.button("Capture Photo"):
+                        if st.button("Capture Photo", key="capture_photo"):
                             st.session_state["captured_frame"] = frame.copy()
                             st.success("Photo captured successfully!")
                             break
@@ -185,7 +186,7 @@ def main():
             )
             st.image(display_frame, caption="Captured Photo", width=300)
 
-            if st.button("Register Employee"):
+            if st.button("Register Employee", key="register_employee"):
                 if emp_id and name:
                     try:
                         os.makedirs(PHOTOS_PATH, exist_ok=True)
@@ -213,7 +214,7 @@ def main():
         camera_frame = st.empty()
         status_placeholder = st.empty()
 
-        if st.button("Toggle Recognition Camera"):
+        if st.button("Toggle Recognition Camera", key="recognition_toggle_camera"):
             if not st.session_state["camera_open"]:
                 if initialize_camera():
                     st.session_state["camera_open"] = True
