@@ -1,87 +1,86 @@
 import os
-import pandas as pd
+from typing import Dict, Optional, Any
+from bson.objectid import ObjectId
+from pymongo import MongoClient
+from gridfs import GridFS
+from .utils import ensure_directory, get_timestamp, store_image
+from .config import DATABASE_NAME
+from datetime import datetime
 import cv2
-from datetime import datetime, timedelta
-import json
-from typing import Dict, Optional, List, Any
-from .utils import ensure_directory, get_timestamp
-from .config import DATABASE_DIR, LOGS_DIR
-
+import numpy as np
 
 class EmployeeDatabase:
-    def __init__(self):
-        """Initialize the employee database."""
-        self.database_path = DATABASE_DIR
-        self.metadata_file = os.path.join(DATABASE_DIR, "metadata.json")
-        ensure_directory(DATABASE_DIR)
+    def __init__(self, db_client: MongoClient):
+        """Initialize the employee database with MongoDB."""
+        self.db = db_client[DATABASE_NAME]
+        self.fs = GridFS(self.db)
+        self.database_path = os.path.join(os.getcwd(), "data", "employee_database", "employee_images")
+        ensure_directory(self.database_path)  # Ensure that the directory exists
         self.metadata: Dict[str, Dict[str, str]] = {}
         self.load_metadata()
 
-    # Add the validation methods at the top of the class
-    def validate_employee_id(self, employee_id: str) -> bool:
-        """Validate employee ID format."""
-        return bool(employee_id and str(employee_id).strip())
-
-    def validate_image(self, image: Any) -> bool:
-        """Validate image format."""
-        return (
-            image is not None
-            and hasattr(image, "shape")
-            and len(image.shape) == 3
-            and image.shape[2] in [3, 4]
-        )
-
-    def validate_name(self, name: str) -> bool:
-        """Validate employee name."""
-        return bool(name and name.strip() and len(name) <= 100)
-
     def load_metadata(self):
-        """Load employee metadata from JSON file."""
+        """Load employee metadata from MongoDB."""
         try:
-            if os.path.exists(self.metadata_file):
-                with open(self.metadata_file, "r", encoding="utf-8") as f:
-                    self.metadata = json.load(f)
-            else:
-                self.metadata = {}
-                self.save_metadata()
-        except json.JSONDecodeError as e:
-            print(f"Error loading metadata: {str(e)}")
-            self.metadata = {}
+            # Fetch all employee metadata from MongoDB
+            self.metadata = {
+                employee["employee_id"]: employee
+                for employee in self.db.employees.find()
+            }
         except Exception as e:
-            print(f"Unexpected error loading metadata: {str(e)}")
+            print(f"Error loading metadata from MongoDB: {str(e)}")
             self.metadata = {}
 
     def save_metadata(self) -> bool:
-        """Save employee metadata to JSON file."""
+        """Save employee metadata to MongoDB."""
         try:
-            with open(self.metadata_file, "w", encoding="utf-8") as f:
-                json.dump(self.metadata, f, indent=4, ensure_ascii=False)
+            # Save metadata for each employee
+            for emp_id, employee_data in self.metadata.items():
+                existing_employee = self.db.employees.find_one({"employee_id": emp_id})
+                if existing_employee:
+                    self.db.employees.update_one(
+                        {"employee_id": emp_id},
+                        {"$set": employee_data}
+                    )
+                else:
+                    self.db.employees.insert_one(employee_data)
             return True
         except Exception as e:
-            print(f"Error saving metadata: {str(e)}")
+            print(f"Error saving metadata to MongoDB: {str(e)}")
             return False
 
-    # Add backup functionality after save_metadata
-    def backup_metadata(self) -> bool:
-        """Create a backup of the metadata file."""
-        try:
-            backup_dir = os.path.join(self.database_path, "backups")
-            ensure_directory(backup_dir)
-            backup_file = os.path.join(
-                backup_dir, f"metadata_backup_{get_timestamp()}.json"
-            )
-            with open(self.metadata_file, "r", encoding="utf-8") as src:
-                with open(backup_file, "w", encoding="utf-8") as dst:
-                    dst.write(src.read())
-            return True
-        except Exception as e:
-            print(f"Backup error: {str(e)}")
+    def validate_employee_id(self, employee_id: str) -> bool:
+        """Validate employee ID by checking if it already exists in the database."""
+        existing_employee = self.db.employees.find_one({"employee_id": employee_id})
+        if existing_employee:
+            print(f"Employee ID {employee_id} already exists.")
             return False
+        return True
+    
+    def validate_name(self, name: str) -> bool:
+        """Validate employee name."""
+        if not name or name.strip() == "":
+            print("Employee name cannot be empty.")
+            return False
+        return True
+    
+    def validate_image(self, image: Any) -> bool:
+        """Validate the image format."""
+        if image is None:
+            print("Image cannot be None.")
+            return False
+
+        # Check if image is a valid numpy array (valid frame from OpenCV)
+        if not isinstance(image, (np.ndarray,)):
+            print("Invalid image format.")
+            return False
+
+        return True
 
     def add_employee(self, employee_id: str, name: str, image: Any) -> bool:
         """Add new employee to database."""
         try:
-            # Use validation methods
+            # Validate employee details
             if not self.validate_employee_id(employee_id):
                 print("Invalid employee ID")
                 return False
@@ -94,104 +93,78 @@ class EmployeeDatabase:
                 print("Invalid image format")
                 return False
 
-            if str(employee_id) in self.metadata:
-                print(f"Employee ID {employee_id} already exists")
-                return False
-
             employee_dir = os.path.join(self.database_path, str(employee_id))
             ensure_directory(employee_dir)
 
+            # Save the employee's reference image locally
             image_path = os.path.join(employee_dir, f"{get_timestamp()}.jpg")
-            if not cv2.imwrite(image_path, image):
-                print("Failed to save employee image")
+            if image is None or image.size == 0:
+                print("Error: Captured image is empty or invalid.")
                 return False
 
+            if not cv2.imwrite(image_path, image):
+                print(f"Failed to save employee image at {image_path}")
+                return False
+
+            # Store the image in MongoDB using GridFS and retrieve its ObjectId
+            image_id = store_image(image_path, f"{employee_id}_reference_image.jpg")
+
+            # Save employee metadata
             self.metadata[str(employee_id)] = {
+                "employee_id": employee_id,
                 "name": name,
                 "registration_date": get_timestamp(),
-                "reference_image": image_path,
+                "reference_image": image_id,  # Store image ObjectId (GridFS file ID)
                 "last_updated": datetime.now().isoformat(),
             }
 
-            success = self.save_metadata()
-            if success:
-                # Create backup after successful addition
-                self.backup_metadata()
-            return success
+            # Save the metadata into MongoDB
+            try:
+                self.db.employees.insert_one({
+                    "_id": str(employee_id),  # Set employee ID as the MongoDB document's _id
+                    **self.metadata[str(employee_id)]  # Include all metadata fields
+                })
+            except Exception as e:
+                print(f"Error saving employee to MongoDB: {str(e)}")
+                return False
+
+            print("Employee added successfully!")
+            return True
 
         except Exception as e:
             print(f"Error adding employee: {str(e)}")
             return False
 
+    def store_image(self, image: Any, filename: str) -> ObjectId:
+        """Store an image in MongoDB's GridFS."""
+        try:
+            # Store the image in GridFS
+            file_id = self.fs.put(image, filename=filename)
+            return file_id
+        except Exception as e:
+            print(f"Error storing image in MongoDB: {str(e)}")
+            return None
 
 class AttendanceLogger:
-    def __init__(self):
-        """Initialize the attendance logger."""
-        self.logs_path = LOGS_DIR
-        ensure_directory(LOGS_DIR)
-        self.current_log: List[Dict[str, str]] = []
-        self.last_log_time: Dict[str, datetime] = {}
+    def __init__(self, db_client: MongoClient):
+        """Initialize the attendance logger with MongoDB."""
+        self.db = db_client[DATABASE_NAME]
+        self.logs_collection = self.db.access_logs
 
     def log_attendance(self, employee_id: str, name: str) -> bool:
-        """Log attendance event with duplicate prevention."""
+        """Log attendance event to MongoDB."""
         try:
-            current_time = datetime.now()
-
-            if employee_id in self.last_log_time:
-                time_diff = (
-                    current_time - self.last_log_time[employee_id]
-                ).total_seconds()
-                if time_diff < 300:  # 5 minutes
-                    return False
-
             entry = {
                 "employee_id": employee_id,
                 "name": name,
-                "timestamp": current_time.isoformat(),
-                "date": current_time.date().isoformat(),
-                "time": current_time.time().isoformat(),
+                "timestamp": get_timestamp(),
+                "date": get_timestamp("%Y-%m-%d"),
+                "time": get_timestamp("%H:%M:%S"),
             }
 
-            self.current_log.append(entry)
-            self.last_log_time[employee_id] = current_time
-            return True
 
+            self.logs_collection.insert_one(entry)
+            return True
         except Exception as e:
             print(f"Error logging attendance: {str(e)}")
             return False
-
-    # Add cleanup method to AttendanceLogger
-    def cleanup_old_logs(self, days: int = 30) -> bool:
-        """Remove logs older than specified days."""
-        try:
-            cutoff_date = datetime.now() - timedelta(days=days)
-            self.current_log = [
-                log
-                for log in self.current_log
-                if datetime.fromisoformat(log["timestamp"]) > cutoff_date
-            ]
-            return True
-        except Exception as e:
-            print(f"Cleanup error: {str(e)}")
-            return False
-
-    def export_log(self) -> Optional[str]:
-        """Export attendance log to CSV."""
-        try:
-            if not self.current_log:
-                return None
-
-            # Clean up old logs before export
-            self.cleanup_old_logs()
-
-            df = pd.DataFrame(self.current_log)
-            filename = f"attendance_log_{get_timestamp()}.csv"
-            filepath = os.path.join(self.logs_path, filename)
-
-            df.to_csv(filepath, index=False)
-            self.current_log = []  # Clear current log after export
-            return filepath
-
-        except Exception as e:
-            print(f"Error exporting log: {str(e)}")
-            return None

@@ -1,179 +1,132 @@
 from deepface import DeepFace
 import cv2
 import numpy as np
-from typing import Optional, Dict, Tuple
+from typing import Tuple
 from .config import FACE_RECOGNITION_SETTINGS, CAMERA_SETTINGS
-from .database import EmployeeDatabase, AttendanceLogger
-from .utils import draw_face_box
-
+from .utils import fetch_employee_by_id, log_access_attempt, get_timestamp, store_image, get_image
+from pymongo import MongoClient
+from gridfs import GridFS
+from bson.objectid import ObjectId
 
 class FacialRecognitionSystem:
-    def __init__(self):
-        self.db = EmployeeDatabase()
-        self.logger = AttendanceLogger()
+    def __init__(self, db_client: MongoClient):
+        # Initialize MongoDB client, GridFS, and settings
+        self.db = db_client["face_recognition_db"]
+        self.fs = GridFS(self.db)
         self.settings = FACE_RECOGNITION_SETTINGS
-        # Initialize DeepFace model once to improve performance
         self.model = DeepFace.build_model(self.settings["model_name"])
 
-    def _validate_frame(self, frame: np.ndarray) -> bool:
-        """Validate if frame is properly formatted and not empty."""
-        return (
-            isinstance(frame, np.ndarray)
-            and frame.size > 0
-            and len(frame.shape) == 3
-            and frame.shape[2] == 3
-        )
-
-    def verify_face(self, face_frame: np.ndarray, employee_data: Dict) -> bool:
-        """
-        Verify if face matches employee reference image.
-
-        Args:
-            face_frame: Numpy array containing the face image
-            employee_data: Dictionary containing employee information
-
-        Returns:
-            bool: True if face matches, False otherwise
-        """
+    def verify_face(self, face_frame: np.ndarray, reference_image_id: ObjectId) -> Tuple[bool, float]:
         try:
-            if not self._validate_frame(face_frame):
-                return False
-
-            # Convert face_frame to BGR if it's not already
-            if face_frame.shape[2] == 4:  # RGBA format
-                face_frame = cv2.cvtColor(face_frame, cv2.COLOR_RGBA2BGR)
+            print(f"Reference image ID: {reference_image_id}")
+            reference_image = self.fs.get(reference_image_id).read()
+            print(f"Reference image size: {len(reference_image)} bytes")
 
             result = DeepFace.verify(
-                img1_path=face_frame,
-                img2_path=employee_data["reference_image"],
-                model_name=self.settings[
-                    "model_name"
-                ],  # Changed from model to model_name
+                img1=face_frame,  # Pass the cropped face frame directly
+                img2_bytes=reference_image,
+                model_name=self.settings["model_name"],
                 detector_backend=self.settings["detector_backend"],
                 distance_metric=self.settings["distance_metric"],
-                enforce_detection=False,
+                enforce_detection=False
             )
-            return (
-                result["verified"] and result["distance"] < self.settings["threshold"]
-            )
-
+            print(f"Verification result: {result}")
+            return result["verified"], result["distance"]
         except Exception as e:
-            print(f"Verification error: {str(e)}")
-            return False
+            print(f"Error verifying face: {str(e)}")
+            return False, 1.0
 
-    def process_frame(self, frame: np.ndarray) -> Tuple[np.ndarray, int]:
-        """
-        Process a single frame for face recognition.
 
-        Args:
-            frame: Input frame as numpy array
+    def process_face_recognition(self, face_id: str, confidence: float) -> str:
+        employee = fetch_employee_by_id(self.db, face_id)
+        reference_image_id = employee.get("reference_image") if employee else None
+        print(f"Employee fetched: {employee}")  # Debugging
 
-        Returns:
-            Tuple containing processed frame and number of faces detected
-        """
-        if not self._validate_frame(frame):
-            print("Invalid frame format")
-            return frame, 0
-
-        try:
-            # Convert frame to RGB if necessary
-            if frame.shape[2] == 4:  # RGBA format
-                frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
-
-            # Detect faces with error handling
-            faces = DeepFace.extract_faces(
-                img_path=frame,
-                detector_backend=self.settings["detector_backend"],
-                enforce_detection=False,
-                align=True,  # Enable face alignment for better accuracy
-            )
-
-            if not faces:
-                return frame, 0
-
-            faces_detected = 0
-            for face in faces:
-                region = face["facial_area"]
-                # Validate region coordinates
-                if not all(v >= 0 for v in region.values()):
-                    continue
-
-                # Ensure region doesn't exceed frame boundaries
-                y1 = max(0, region["y"])
-                y2 = min(frame.shape[0], region["y"] + region["h"])
-                x1 = max(0, region["x"])
-                x2 = min(frame.shape[1], region["x"] + region["w"])
-
-                face_frame = frame[y1:y2, x1:x2]
-
-                if face_frame.size == 0:
-                    continue
-
-                # Check against each known employee
-                face_matched = False
-                for emp_id, emp_data in self.db.metadata.items():
-                    if self.verify_face(face_frame, emp_data):
-                        self.logger.log_attendance(emp_id, emp_data["name"])
-                        frame = draw_face_box(
-                            frame, (x1, y1, x2 - x1, y2 - y1), emp_data["name"]
-                        )
-                        face_matched = True
-                        faces_detected += 1
-                        break
-
-                if not face_matched:
-                    frame = draw_face_box(
-                        frame, (x1, y1, x2 - x1, y2 - y1), "Unknown", color=(0, 0, 255)
-                    )
-                    faces_detected += 1
-
-            return frame, faces_detected
-
-        except Exception as e:
-            print(f"Frame processing error: {str(e)}")
-            return frame, 0
+        if employee:
+            status = "ACCESS GRANTED"
+            log_data = {
+                "timestamp": get_timestamp(),
+                "employee_id": employee["employee_id"],
+                "name": employee["name"],
+                "status": status,
+                "confidence": confidence
+            }
+            log_access_attempt(self.db, log_data)
+            return f"{employee['name']} ({status}) - {confidence:.2f}%"
+        else:
+            status = "ACCESS DENIED"
+            log_data = {
+                "timestamp": get_timestamp(),
+                "employee_id": "Unknown",
+                "name": "Unknown",
+                "status": status,
+                "confidence": confidence
+            }
+            log_access_attempt(self.db, log_data)
+            return f"Unknown Person ({status}) - {confidence:.2f}%"
 
     def run(self):
-        """Run real-time facial recognition."""
         cap = cv2.VideoCapture(CAMERA_SETTINGS["camera_id"])
-
-        # Configure camera settings
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_SETTINGS["frame_width"])
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_SETTINGS["frame_height"])
 
-        if not cap.isOpened():
-            raise RuntimeError("Failed to open camera")
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                continue
 
-        try:
-            while True:
-                ret, frame = cap.read()
+            # Detect faces
+            faces = self.detect_faces(frame)
 
-                if not ret or frame is None:
-                    print("Failed to capture frame")
-                    continue
+            for face_id, face_info in faces.items():
+                x, y, w, h = face_info["coordinates"]
+                face_frame = face_info["face"]
 
-                processed_frame, faces_detected = self.process_frame(frame)
+                # Lookup the employee's reference image ID
+                employee = fetch_employee_by_id(self.db, face_id)
+                reference_image_id = employee["image_id"] if employee and "image_id" in employee else None
 
-                # Display frame with face count
-                cv2.putText(
-                    processed_frame,
-                    f"Faces detected: {faces_detected}",
-                    (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1,
-                    (0, 255, 0),
-                    2,
-                )
+                if reference_image_id:
+                    verified, distance = self.verify_face(face_frame, reference_image_id)
+                    confidence = 1.0 - distance
+                else:
+                    verified = False
+                    confidence = 0.0  # Default confidence for unknown faces
 
-                cv2.imshow("Facial Recognition System", processed_frame)
+                # Process recognition based on verification result
+                message = self.process_face_recognition(face_id if verified else "Unknown", confidence)
 
-                if cv2.waitKey(1) & 0xFF == ord("q"):
-                    break
+                # Draw bounding box and label
+                color = (0, 255, 0) if "ACCESS GRANTED" in message else (0, 0, 255)
+                cv2.rectangle(frame, (x, y), (x+w, y+h), color, 2)
+                cv2.putText(frame, message, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
-        except KeyboardInterrupt:
-            print("Stopping facial recognition system...")
+            cv2.imshow("Face Recognition", frame)
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
 
-        finally:
-            cap.release()
-            cv2.destroyAllWindows()
-            self.logger.export_log()
+        cap.release()
+        cv2.destroyAllWindows()
+
+
+    def detect_faces(self, frame: np.ndarray):
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+
+        face_data = {}
+        for i, (x, y, w, h) in enumerate(faces):
+            face_crop = frame[y:y+h, x:x+w]
+            face_data[str(i)] = {
+                "face": face_crop,
+                "coordinates": (x, y, w, h)  # Include coordinates for bounding boxes
+            }
+
+            # Draw rectangle around the face
+            cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 0, 0), 2)  # Blue rectangle with thickness 2
+            # Display a label
+            cv2.putText(frame, f"Face {i}", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+
+        return face_data
+
+

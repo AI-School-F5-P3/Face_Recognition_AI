@@ -1,13 +1,16 @@
 import cv2
+from pymongo import MongoClient
 from src.face_recognition import FacialRecognitionSystem
 from src.database import EmployeeDatabase
 
 
-
-def register_new_employee(db):
+def register_new_employee(db: EmployeeDatabase):
     """Utility function to register a new employee."""
     try:
         emp_id = input("Enter employee ID: ")
+        if not db.validate_employee_id(emp_id):
+            print("Employee ID already exists. Try another.")
+            return
         name = input("Enter employee name: ")
 
         # Initialize camera
@@ -39,6 +42,7 @@ def register_new_employee(db):
             elif key == ord(" "):
                 # Verify frame again before processing
                 if frame is not None and hasattr(frame, "shape"):
+                    print(f"Image shape: {frame.shape if frame is not None else 'None'}, type: {type(frame)}")
                     if db.add_employee(emp_id, name, frame):
                         print(f"Successfully registered employee {name}")
                     else:
@@ -57,6 +61,10 @@ def register_new_employee(db):
 
 
 if __name__ == "__main__":
+    # Connect to MongoDB
+    client = MongoClient("mongodb://localhost:27017")
+    db = EmployeeDatabase(client)
+
     while True:
         print("\nFacial Recognition System")
         print("1. Register new employee")
@@ -66,10 +74,10 @@ if __name__ == "__main__":
         choice = input("Enter choice (1-3): ")
 
         if choice == "1":
-            db = EmployeeDatabase()
             register_new_employee(db)
         elif choice == "2":
-            system = FacialRecognitionSystem()
+            # Initialize FacialRecognitionSystem with the MongoDB connection
+            system = FacialRecognitionSystem(client)
             system.run()
         elif choice == "3":
             break
