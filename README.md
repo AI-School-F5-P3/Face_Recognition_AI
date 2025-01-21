@@ -1,3 +1,5 @@
+![Designer (2)](https://github.com/user-attachments/assets/7cd34b66-2873-4017-ae70-32f8c667423a)
+
 # Face Recognition project - Employee Management System
 
 ### Business Presentation
